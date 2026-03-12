@@ -1,0 +1,242 @@
+models:
+  user_agent:
+    model: "claude-sonnet-4-5-20250929"
+    max_tokens: 512
+    temperature: 0
+  data_agent:
+    model: "claude-opus-4-6"
+    max_tokens: 2048
+    temperature: 0
+  orchestrator:
+    model: "claude-sonnet-4-5-20250929"
+    max_tokens: 1024
+    temperature: 0
+
+retrieval:
+  embedding_model: "BAAI/bge-base-en-v1.5"   # smaller/faster; swap to bge-large for accuracy
+  training_data: "spider_text_sql 2.csv"
+  top_k: 5
+  min_similarity: 0.25
+
+routing:
+  tool_match_threshold: 0.15    # min score to accept a tool match
+  ambiguity_threshold: 0.7      # below this, ask clarifying questions
+  fallback_strategy: "sql"      # sql | escalate | refuse
+
+security:
+  max_rows_returned: 10000
+  blocked_sql_patterns:
+    - "DROP"
+    - "DELETE"
+    - "UPDATE"
+    - "ALTER"
+    - "TRUNCATE"
+    - "INSERT"
+  require_limit: true
+  default_limit: 100
+
+schema:
+  dialect: "postgresql"          # postgresql | mysql | sqlite | snowflake
+  schema_file: "schema.sql"     # optional: load from file
+  inline: |
+    CREATE TABLE fct_orders (
+      order_id INT PRIMARY KEY,
+      customer_id INT REFERENCES dim_customer(customer_id),
+      order_amount DECIMAL(12,2),
+      cogs DECIMAL(12,2),
+      order_status VARCHAR(20),  -- values: 'completed', 'pending', 'cancelled'
+      order_timestamp TIMESTAMP
+    );
+
+    CREATE TABLE dim_customer (
+      customer_id INT PRIMARY KEY,
+      customer_name VARCHAR(100),
+      segment VARCHAR(50),       -- values: 'Enterprise', 'SMB', 'Consumer'
+      region VARCHAR(50)         -- values: 'NA', 'EU', 'APAC', 'LATAM'
+    );
+
+    CREATE TABLE dim_product (
+      product_id INT PRIMARY KEY,
+      product_name VARCHAR(100),
+      category VARCHAR(50),
+      unit_price DECIMAL(10,2)
+    );
+
+    CREATE TABLE fct_order_items (
+      order_id INT REFERENCES fct_orders(order_id),
+      product_id INT REFERENCES dim_product(product_id),
+      quantity INT,
+      discount DECIMAL(5,2)
+    );
+
+tools:
+  - name: "orders.top_customers"
+    version: "2.1.0"
+    summary: "Top customer(s) by margin for a period"
+    inputs:
+      period:
+        type: string
+        enum: [last_7d, last_28d, mtd, qtd, ytd, custom]
+        default: last_28d
+      n:
+        type: integer
+        minimum: 1
+        default: 10
+    outputs:
+      rows:
+        type: array
+        items: [customer_id, customer_name, margin]
+    semantic_binding:
+      metrics: [margin]
+      dimensions: [customer, time]
+    keywords: [top, best, highest, customer, margin, revenue, profit, biggest]
+    access_control:
+      roles: [analyst, manager, executive]
+    sql_fallback: |
+      SELECT c.customer_id, c.customer_name,
+             SUM(f.order_amount - f.cogs) AS margin
+      FROM fct_orders f
+      JOIN dim_customer c ON f.customer_id = c.customer_id
+      WHERE f.order_status = 'completed'
+        AND f.order_timestamp >= :period_start
+        AND f.order_timestamp < :period_end
+      GROUP BY 1, 2
+      ORDER BY margin DESC
+      LIMIT :n
+
+  - name: "orders.revenue_by_region"
+    version: "1.3.0"
+    summary: "Revenue breakdown by region and time"
+    inputs:
+      period:
+        type: string
+        default: last_28d
+      granularity:
+        type: string
+        enum: [day, week, month, quarter]
+        default: month
+    outputs:
+      rows:
+        type: array
+        items: [region, period, revenue, order_count]
+    semantic_binding:
+      metrics: [revenue, gmv, order_count]
+      dimensions: [region, time]
+    keywords: [revenue, region, area, geography, sales, breakdown, by region]
+    access_control:
+      roles: [analyst, manager, executive]
+    sql_fallback: |
+      SELECT c.region,
+             DATE_TRUNC(:granularity, f.order_timestamp) AS period,
+             SUM(f.order_amount) AS revenue,
+             COUNT(*) AS order_count
+      FROM fct_orders f
+      JOIN dim_customer c ON f.customer_id = c.customer_id
+      WHERE f.order_status = 'completed'
+        AND f.order_timestamp >= :period_start
+        AND f.order_timestamp < :period_end
+      GROUP BY 1, 2
+      ORDER BY period, revenue DESC
+
+  - name: "products.category_performance"
+    version: "1.0.2"
+    summary: "Product category performance metrics"
+    inputs:
+      period:
+        type: string
+        default: last_28d
+      metric:
+        type: string
+        enum: [revenue, units_sold, margin]
+        default: revenue
+      top_n:
+        type: integer
+        default: 10
+    outputs:
+      rows:
+        type: array
+        items: [category, metric_value, pct_of_total]
+    semantic_binding:
+      metrics: [revenue, units_sold, margin]
+      dimensions: [category, product]
+    keywords: [product, category, performance, selling, popular, best selling]
+    access_control:
+      roles: [analyst, manager]
+    sql_fallback: |
+      SELECT p.category,
+             SUM(oi.quantity * p.unit_price) AS revenue,
+             SUM(oi.quantity) AS units_sold
+      FROM fct_order_items oi
+      JOIN dim_product p ON oi.product_id = p.product_id
+      JOIN fct_orders f ON oi.order_id = f.order_id
+      WHERE f.order_status = 'completed'
+        AND f.order_timestamp >= :period_start
+        AND f.order_timestamp < :period_end
+      GROUP BY 1
+      ORDER BY revenue DESC
+      LIMIT :top_n
+
+  - name: "customers.churn_risk"
+    version: "3.0.1"
+    summary: "Customers at risk of churning based on order recency"
+    inputs:
+      threshold_days:
+        type: integer
+        default: 90
+      segment:
+        type: string
+        enum: [Enterprise, SMB, Consumer, all]
+        default: all
+    outputs:
+      rows:
+        type: array
+        items: [customer_id, customer_name, days_since_last_order, lifetime_value]
+    semantic_binding:
+      metrics: [churn_score, last_order_days, lifetime_value]
+      dimensions: [customer, segment]
+    keywords: [churn, risk, inactive, lost, leaving, retention, haven't ordered]
+    access_control:
+      roles: [manager, executive]
+    sql_fallback: |
+      SELECT c.customer_id, c.customer_name,
+             CURRENT_DATE - MAX(f.order_timestamp)::date AS days_since_last_order,
+             SUM(f.order_amount) AS lifetime_value
+      FROM dim_customer c
+      JOIN fct_orders f ON c.customer_id = f.customer_id
+      WHERE f.order_status = 'completed'
+      GROUP BY 1, 2
+      HAVING CURRENT_DATE - MAX(f.order_timestamp)::date > :threshold_days
+      ORDER BY lifetime_value DESC
+
+  - name: "orders.order_trend"
+    version: "2.0.0"
+    summary: "Order volume and value trends over time"
+    inputs:
+      period:
+        type: string
+        default: last_28d
+      granularity:
+        type: string
+        enum: [day, week, month]
+        default: week
+    outputs:
+      rows:
+        type: array
+        items: [period, order_count, gmv, aov]
+    semantic_binding:
+      metrics: [order_count, gmv, aov]
+      dimensions: [time]
+    keywords: [trend, over time, growth, decline, month, week, daily, trending]
+    access_control:
+      roles: [analyst, manager, executive]
+    sql_fallback: |
+      SELECT DATE_TRUNC(:granularity, f.order_timestamp) AS period,
+             COUNT(*) AS order_count,
+             SUM(f.order_amount) AS gmv,
+             AVG(f.order_amount) AS aov
+      FROM fct_orders f
+      WHERE f.order_status = 'completed'
+        AND f.order_timestamp >= :period_start
+        AND f.order_timestamp < :period_end
+      GROUP BY 1
+      ORDER BY period
