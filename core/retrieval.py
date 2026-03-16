@@ -10,6 +10,7 @@ examples in the Opus prompt.
 import numpy as np
 import pandas as pd
 import faiss
+import os
 from sentence_transformers import SentenceTransformer
 from rich.console import Console
 
@@ -25,37 +26,58 @@ class RetrievalIndex:
         self.index: faiss.IndexFlatIP = None
         self.embedder: SentenceTransformer = None
         self._loaded = False
+        self.index_file = "training_index.faiss"
+        self.embeddings_file = "training_embeddings.npy"
 
     # Initialization (called once at startup)
+    def load_index(self):
+        """Load FAISS index and embeddings from disk."""
+        if os.path.exists(self.index_file) and os.path.exists(self.embeddings_file):
+            self.index = faiss.read_index(self.index_file)
+            self.embeddings = np.load(self.embeddings_file)
+            return True
+        return False
 
     def load(self):
         """Load CSV, download embedding model, build FAISS index."""
-        cfg = self.config.retrieval
-        csv_path = cfg["training_data"]
 
-        # Load training pairs
-        console.log(f"[bold blue]Loading training data:[/] {csv_path}")
-        self.df = pd.read_csv(csv_path)
-        self.df = self.df.dropna(subset=["text_query", "sql_command"])
-        console.log(f"  → {len(self.df):,} query pairs loaded")
+        if self.load_index():
+            print("Loaded FAISS index and embeddings from disk.")
+        else:
+            cfg = self.config.retrieval
+            csv_path = cfg["training_data"]
 
-        # Load embedding model
-        console.log(f"[bold blue]Loading embedding model:[/] {cfg['embedding_model']}")
-        self.embedder = SentenceTransformer(cfg["embedding_model"])
+            # Load training pairs
+            console.log(f"[bold blue]Loading training data:[/] {csv_path}")
+            self.df = pd.read_csv(csv_path)
+            self.df = self.df.dropna(subset=["text_query", "sql_command"])
+            console.log(f"  → {len(self.df):,} query pairs loaded")
 
-        # Embed all training queries and build index
-        console.log("[bold blue]Building FAISS index...[/]")
-        embeddings = self.embedder.encode(
-            self.df["text_query"].tolist(),
-            show_progress_bar=True,
-            normalize_embeddings=True,     # Normalize so inner product = cosine similarity
-            batch_size=128
-        )
-        dim = embeddings.shape[1]
-        self.index = faiss.IndexFlatIP(dim)  # Inner Product index
-        self.index.add(embeddings.astype("float32"))
-        console.log(f"  → Index built: {self.index.ntotal} vectors, dim={dim}")
+            # Load embedding model
+            console.log(f"[bold blue]Loading embedding model:[/] {cfg['embedding_model']}")
+            self.embedder = SentenceTransformer(cfg["embedding_model"])
+
+            # Embed all training queries and build index
+            console.log("[bold blue]Building FAISS index...[/]")
+            embeddings = self.embedder.encode(
+                self.df["text_query"].tolist(),
+                show_progress_bar=True,
+                normalize_embeddings=True,     # Normalize so inner product = cosine similarity
+                batch_size=128
+            )
+            dim = embeddings.shape[1]
+            self.index = faiss.IndexFlatIP(dim)  # Inner Product index
+            self.index.add(embeddings.astype("float32"))
+            self.save_index()
+            console.log(f"  → Index built: {self.index.ntotal} vectors, dim={dim}")
+            print("Saved FAISS index and embeddings to disk.")
+
         self._loaded = True
+    
+    def save_index(self):
+        """Save FAISS index and embeddings to disk."""
+        faiss.write_index(self.index, self.index_file)
+        np.save(self.embeddings_file, self.embeddings)
 
     # Query (called per user request)
     def retrieve(self, query: str, k: int = None) -> list[dict]:

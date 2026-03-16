@@ -10,13 +10,18 @@ import argparse
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
-
+from concurrent.futures import ThreadPoolExecutor
 from core import Orchestrator
 from utils import display_response, run_eval
 
 load_dotenv()
 console = Console()
 
+def run_batch(orchestrator, demo_queries):
+    with ThreadPoolExecutor() as executor:
+        results = list(executor.map(orchestrator.process, demo_queries))
+    for resp in results:
+        display_response(resp)
 
 def main():
     parser = argparse.ArgumentParser(description="Enterprise Data Agent")
@@ -72,11 +77,8 @@ def main():
             "Who are our top 25 customers by margin this month?",
             "Find all orders over $10K placed on weekends with a discount above 15%",
         ]
-        for q in demo_queries:
-            console.print(f"\n[bold purple]Query:[/] {q}")
-            resp = orchestrator.process(q)
-            display_response(resp)
-
+        
+        run_batch(orchestrator, demo_queries)
 
 if __name__ == "__main__":
     main()
