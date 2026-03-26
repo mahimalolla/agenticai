@@ -10,6 +10,7 @@ from core.config import Config
 from core.retrieval import RetrievalIndex
 from core.tool_registry import ToolRegistry
 from core.sql_validator import SQLValidator
+from core.db import DatabaseManager
 from core.user_agent import UserAgent
 from core.data_agent import DataAgent
 from core.orchestrator import Orchestrator
@@ -17,5 +18,5 @@ from core.orchestrator import Orchestrator
 __all__ = [
     "Route", "Intent", "ToolMatch", "TraceStep", "AgentResponse",
     "Config", "RetrievalIndex", "ToolRegistry", "SQLValidator",
-    "UserAgent", "DataAgent", "Orchestrator",
+    "DatabaseManager", "UserAgent", "DataAgent", "Orchestrator",
 ]

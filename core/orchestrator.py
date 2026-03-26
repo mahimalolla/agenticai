@@ -19,6 +19,7 @@ from core.retrieval import RetrievalIndex
 from core.tool_registry import ToolRegistry
 from core.user_agent import UserAgent
 from core.data_agent import DataAgent
+from core.db import DatabaseManager
 
 console = Console()
 
@@ -31,19 +32,28 @@ class Orchestrator:
         # Create shared Anthropic client (one connection pool for all agents)
         self.client = anthropic.Anthropic()
 
-        # Initialize components (retrieval index is lazy-loaded)
+        # Initialize components (retrieval index and database are lazy-loaded)
+        self.db = DatabaseManager(self.config)
         self.retrieval = RetrievalIndex(self.config)
         self.tool_registry = ToolRegistry(self.config)
         self.user_agent = UserAgent(self.client, self.config)
         self.data_agent = DataAgent(
             self.client, self.config,
-            self.tool_registry, self.retrieval
+            self.tool_registry, self.retrieval,
+            self.db                               # db passed in for query execution
         )
         self._initialized = False
 
     def initialize(self):
-        """Load embedding model and build FAISS index. Call once at startup."""
+        """
+        Set up all stateful components. Call once at startup.
+
+        Order matters:
+          1. Database first — schema and seed must exist before any query runs
+          2. Retrieval index second — independent of db, but slow to build
+        """
         if not self._initialized:
+            self.db.setup()
             self.retrieval.load()
             self._initialized = True
             console.log("[bold green]✓ Orchestrator initialized[/]")
@@ -57,7 +67,7 @@ class Orchestrator:
             user_context: Auth info — user_id, roles, region_whitelist
 
         Returns:
-            AgentResponse with results, SQL, evidence, trace, and cost
+            AgentResponse with results, rows, SQL, evidence, trace, and cost
         """
         self.initialize()
         start = time.time()
@@ -114,6 +124,7 @@ class Orchestrator:
             route=result.get("route", "unknown"),
             request_id=request_id,
             data=result,
+            rows=result.get("rows", []),
             sql=result.get("sql", result.get("sql_template", "")),
             evidence=result.get("evidence", {}),
             trace=all_trace,

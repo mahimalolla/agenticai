@@ -19,6 +19,15 @@ class Config:
         """Model assignments for each agent (user_agent, data_agent, orchestrator)."""
         return self._cfg["models"]
 
+    @property
+    def database(self) -> dict:
+        """PostgreSQL connection settings. Password comes from DB_PASSWORD env var."""
+        return self._cfg.get("database", {
+            "host":   "localhost",
+            "port":   5432,
+            "dbname": "enterprise",
+            "user":   "postgres",
+        })
 
     @property
     def tools(self) -> list:

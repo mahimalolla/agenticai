@@ -67,7 +67,8 @@ class AgentResponse:
     route: str = ""                         # Which path was taken
     request_id: str = ""                    # Unique ID for audit
     data: dict = field(default_factory=dict)              # Full result payload
-    sql: str = ""                           # Generated SQL (if sql_fallback route)
+    rows: list = field(default_factory=list)              # Query result rows (list of dicts)
+    sql: str = ""                           # Generated or template SQL that was executed
     evidence: dict = field(default_factory=dict)          # Audit metadata
     trace: list = field(default_factory=list)             # Complete list of TraceSteps
     cost_usd: float = 0.0                  # Total API cost

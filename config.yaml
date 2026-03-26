@@ -11,7 +11,13 @@ models:
     model: "claude-sonnet-4-5-20250929"
     max_tokens: 1024
     temperature: 0
-
+database:
+  host:   "localhost"
+  port:   5432
+  dbname: "enterprise"
+  user:   "postgres"
+  # password is read from DB_PASSWORD environment variable (set in .env)
+  
 retrieval:
   embedding_model: "BAAI/bge-base-en-v1.5"   # smaller/faster; swap to bge-large for accuracy
   training_data: "spider_text_sql 2.csv"
